@@ -2,20 +2,89 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Local Multiplayer Air Hockey</title>
-    <!-- PeerJS Library for Peer-to-Peer local connection -->
+    <!-- PeerJS Library for Peer-to-Peer connection -->
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        * { box-sizing: border-box; touch-action: none; margin: 0; padding: 0; }
-        body { background: #121212; color: #fff; font-family: sans-serif; text-align: center; overflow: hidden; }
-        #setup { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; gap: 12px; }
-        input, button { padding: 12px 20px; font-size: 16px; border-radius: 8px; border: none; }
-        button { background: #00e676; color: #000; font-weight: bold; cursor: pointer; }
-        input { text-align: center; text-transform: uppercase; width: 180px; }
-        #game-container { display: none; width: 100vw; height: 100vh; position: relative; }
-        canvas { background: #222; width: 100%; height: 100%; display: block; }
-        #status { position: absolute; top: 10px; width: 100%; text-align: center; font-weight: bold; pointer-events: none; }
+        * { 
+            box-sizing: border-box; 
+            touch-action: none; 
+            margin: 0; 
+            padding: 0; 
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        
+        html, body { 
+            width: 100%; 
+            height: 100%; 
+            background: #121212; 
+            color: #fff; 
+            font-family: sans-serif; 
+            text-align: center; 
+            overflow: hidden; 
+            position: fixed; /* Prevents Android browser scrolling and bounce */
+            top: 0;
+            left: 0;
+        }
+
+        #setup { 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            justify-content: center; 
+            height: 100%; 
+            gap: 12px; 
+        }
+
+        input, button { 
+            padding: 12px 20px; 
+            font-size: 16px; 
+            border-radius: 8px; 
+            border: none; 
+            outline: none;
+        }
+
+        button { 
+            background: #00e676; 
+            color: #000; 
+            font-weight: bold; 
+            cursor: pointer; 
+        }
+
+        input { 
+            text-align: center; 
+            text-transform: uppercase; 
+            width: 180px; 
+        }
+
+        #game-container { 
+            display: none; 
+            width: 100%; 
+            height: 100%; 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+        }
+
+        canvas { 
+            background: #222; 
+            width: 100%; 
+            height: 100%; 
+            display: block; 
+        }
+
+        #status { 
+            position: absolute; 
+            top: 10px; 
+            width: 100%; 
+            text-align: center; 
+            font-weight: bold; 
+            pointer-events: none; 
+            text-shadow: 0 0 4px #000;
+            z-index: 10;
+        }
     </style>
 </head>
 <body>
@@ -45,7 +114,7 @@
         
         // Game State
         const state = {
-            paddle1X: 0.5, // 0 to 1 scale for dynamic screen sizes
+            paddle1X: 0.5, // Scaled 0 to 1 for dynamic screen widths
             paddle2X: 0.5,
             ballX: 0.5,
             ballY: 0.5,
@@ -55,11 +124,16 @@
             score2: 0
         };
 
+        // Screen sizing fix specifically targeting mobile browser dynamic address bars
         function resizeCanvas() {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight;
         }
+
         window.addEventListener('resize', resizeCanvas);
+        window.addEventListener('orientationchange', () => {
+            setTimeout(resizeCanvas, 100);
+        });
         resizeCanvas();
 
         // 1. Host Logic
@@ -71,6 +145,7 @@
                 isHost = true;
                 setupDiv.style.display = 'none';
                 gameDiv.style.display = 'block';
+                resizeCanvas();
                 statusText.innerText = `Room Code: ${code} (Waiting for Joiner...)`;
             });
 
@@ -91,13 +166,14 @@
                 isHost = false;
                 setupDiv.style.display = 'none';
                 gameDiv.style.display = 'block';
+                resizeCanvas();
                 setupConnection();
             });
         };
 
-        // 3. Network Communication
+        // 3. Network Communication & Controls
         function setupConnection() {
-            statusText.innerText = "Connected! Drag to Move";
+            statusText.innerText = "Connected! Drag bottom area to Move";
 
             conn.on('data', (data) => {
                 if (isHost) {
@@ -110,14 +186,17 @@
             });
 
             // Touch input listener
-            window.addEventListener('touchmove', (e) => {
+            const handleTouch = (e) => {
                 const touchX = e.touches[0].clientX / canvas.width;
                 if (isHost) {
                     state.paddle1X = touchX;
                 } else {
-                    conn.send({ paddleX: touchX });
+                    if (conn && conn.open) conn.send({ paddleX: touchX });
                 }
-            });
+            };
+
+            window.addEventListener('touchmove', handleTouch, { passive: false });
+            window.addEventListener('touchstart', handleTouch, { passive: false });
 
             requestAnimationFrame(gameLoop);
         }
@@ -133,12 +212,12 @@
                 if (state.ballX <= 0.02 || state.ballX >= 0.98) state.ballVX *= -1;
 
                 // Paddle 1 Collision (Bottom - Host)
-                if (state.ballY >= 0.92 && Math.abs(state.ballX - state.paddle1X) < 0.15) {
+                if (state.ballY >= 0.90 && Math.abs(state.ballX - state.paddle1X) < 0.15) {
                     state.ballVY = -Math.abs(state.ballVY);
                 }
 
                 // Paddle 2 Collision (Top - Joiner)
-                if (state.ballY <= 0.08 && Math.abs(state.ballX - state.paddle2X) < 0.15) {
+                if (state.ballY <= 0.10 && Math.abs(state.ballX - state.paddle2X) < 0.15) {
                     state.ballVY = Math.abs(state.ballVY);
                 }
 
@@ -169,6 +248,7 @@
 
             // Center line
             ctx.strokeStyle = "#444";
+            ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.moveTo(0, h / 2);
             ctx.lineTo(w, h / 2);
@@ -180,8 +260,7 @@
             ctx.fillText(isHost ? state.score1 : state.score2, 20, h / 2 + 50);
             ctx.fillText(isHost ? state.score2 : state.score1, 20, h / 2 - 30);
 
-            // Host view: Bottom is Self (1), Top is Opponent (2)
-            // Joiner view: Bottom is Self (2), Top is Opponent (1)
+            // Host view vs Joiner view setup
             const myPaddleX = (isHost ? state.paddle1X : state.paddle2X) * w;
             const oppPaddleX = (isHost ? state.paddle2X : state.paddle1X) * w;
             
@@ -195,11 +274,11 @@
 
             // Draw My Paddle (Bottom)
             ctx.fillStyle = '#00e676';
-            ctx.fillRect(myPaddleX - 40, h - 30, 80, 15);
+            ctx.fillRect(myPaddleX - 40, h - 35, 80, 15);
 
             // Draw Opponent Paddle (Top)
             ctx.fillStyle = '#ff1744';
-            ctx.fillRect(oppPaddleX - 40, 15, 80, 15);
+            ctx.fillRect(oppPaddleX - 40, 20, 80, 15);
         }
     </script>
 </body>
