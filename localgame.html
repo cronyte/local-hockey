@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Local Multiplayer Air Hockey</title>
+    <!-- PeerJS Library for Peer-to-Peer local connection -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        * { box-sizing: border-box; touch-action: none; margin: 0; padding: 0; }
+        body { background: #121212; color: #fff; font-family: sans-serif; text-align: center; overflow: hidden; }
+        #setup { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; gap: 12px; }
+        input, button { padding: 12px 20px; font-size: 16px; border-radius: 8px; border: none; }
+        button { background: #00e676; color: #000; font-weight: bold; cursor: pointer; }
+        input { text-align: center; text-transform: uppercase; width: 180px; }
+        #game-container { display: none; width: 100vw; height: 100vh; position: relative; }
+        canvas { background: #222; width: 100%; height: 100%; display: block; }
+        #status { position: absolute; top: 10px; width: 100%; text-align: center; font-weight: bold; pointer-events: none; }
+    </style>
+</head>
+<body>
+
+    <div id="setup">
+        <h2>Local Multiplayer Hockey</h2>
+        <p>Ensure both phones are on the same Wi-Fi/Hotspot.</p>
+        <button id="btn-host">Create Room (Host)</button>
+        <p>OR</p>
+        <input type="text" id="room-input" placeholder="Enter 4-letter Code" maxlength="4">
+        <button id="btn-join">Join Room</button>
+    </div>
+
+    <div id="game-container">
+        <div id="status">Connecting...</div>
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <script>
+        const setupDiv = document.getElementById('setup');
+        const gameDiv = document.getElementById('game-container');
+        const statusText = document.getElementById('status');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        let peer, conn, isHost = false;
+        
+        // Game State
+        const state = {
+            paddle1X: 0.5, // 0 to 1 scale for dynamic screen sizes
+            paddle2X: 0.5,
+            ballX: 0.5,
+            ballY: 0.5,
+            ballVX: 0.005,
+            ballVY: 0.008,
+            score1: 0,
+            score2: 0
+        };
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // 1. Host Logic
+        document.getElementById('btn-host').onclick = () => {
+            const code = Math.random().toString(36).substring(2, 6).toUpperCase();
+            peer = new Peer('hockey-' + code);
+
+            peer.on('open', () => {
+                isHost = true;
+                setupDiv.style.display = 'none';
+                gameDiv.style.display = 'block';
+                statusText.innerText = `Room Code: ${code} (Waiting for Joiner...)`;
+            });
+
+            peer.on('connection', (c) => {
+                conn = c;
+                setupConnection();
+            });
+        };
+
+        // 2. Joiner Logic
+        document.getElementById('btn-join').onclick = () => {
+            const code = document.getElementById('room-input').value.trim().toUpperCase();
+            if (!code) return alert('Enter Code!');
+
+            peer = new Peer();
+            peer.on('open', () => {
+                conn = peer.connect('hockey-' + code);
+                isHost = false;
+                setupDiv.style.display = 'none';
+                gameDiv.style.display = 'block';
+                setupConnection();
+            });
+        };
+
+        // 3. Network Communication
+        function setupConnection() {
+            statusText.innerText = "Connected! Drag to Move";
+
+            conn.on('data', (data) => {
+                if (isHost) {
+                    // Host receives paddle position from Joiner
+                    state.paddle2X = data.paddleX;
+                } else {
+                    // Joiner receives entire state from Host
+                    Object.assign(state, data);
+                }
+            });
+
+            // Touch input listener
+            window.addEventListener('touchmove', (e) => {
+                const touchX = e.touches[0].clientX / canvas.width;
+                if (isHost) {
+                    state.paddle1X = touchX;
+                } else {
+                    conn.send({ paddleX: touchX });
+                }
+            });
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 4. Main Game Loop
+        function gameLoop() {
+            if (isHost) {
+                // Host handles ball physics
+                state.ballX += state.ballVX;
+                state.ballY += state.ballVY;
+
+                // Wall bounces
+                if (state.ballX <= 0.02 || state.ballX >= 0.98) state.ballVX *= -1;
+
+                // Paddle 1 Collision (Bottom - Host)
+                if (state.ballY >= 0.92 && Math.abs(state.ballX - state.paddle1X) < 0.15) {
+                    state.ballVY = -Math.abs(state.ballVY);
+                }
+
+                // Paddle 2 Collision (Top - Joiner)
+                if (state.ballY <= 0.08 && Math.abs(state.ballX - state.paddle2X) < 0.15) {
+                    state.ballVY = Math.abs(state.ballVY);
+                }
+
+                // Goals
+                if (state.ballY > 1) { state.score2++; resetBall(); }
+                if (state.ballY < 0) { state.score1++; resetBall(); }
+
+                // Send state update to Joiner
+                if (conn && conn.open) conn.send(state);
+            }
+
+            render();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function resetBall() {
+            state.ballX = 0.5;
+            state.ballY = 0.5;
+            state.ballVY = isHost ? 0.008 : -0.008;
+        }
+
+        // 5. Render Canvas
+        function render() {
+            const w = canvas.width;
+            const h = canvas.height;
+
+            ctx.clearRect(0, 0, w, h);
+
+            // Center line
+            ctx.strokeStyle = "#444";
+            ctx.beginPath();
+            ctx.moveTo(0, h / 2);
+            ctx.lineTo(w, h / 2);
+            ctx.stroke();
+
+            // Scores
+            ctx.fillStyle = "#666";
+            ctx.font = "30px sans-serif";
+            ctx.fillText(isHost ? state.score1 : state.score2, 20, h / 2 + 50);
+            ctx.fillText(isHost ? state.score2 : state.score1, 20, h / 2 - 30);
+
+            // Host view: Bottom is Self (1), Top is Opponent (2)
+            // Joiner view: Bottom is Self (2), Top is Opponent (1)
+            const myPaddleX = (isHost ? state.paddle1X : state.paddle2X) * w;
+            const oppPaddleX = (isHost ? state.paddle2X : state.paddle1X) * w;
+            
+            // Draw Ball (Invert coordinates for Joiner)
+            const bx = state.ballX * w;
+            const by = (isHost ? state.ballY : 1 - state.ballY) * h;
+            ctx.fillStyle = '#ffeb3b';
+            ctx.beginPath();
+            ctx.arc(bx, by, 12, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Draw My Paddle (Bottom)
+            ctx.fillStyle = '#00e676';
+            ctx.fillRect(myPaddleX - 40, h - 30, 80, 15);
+
+            // Draw Opponent Paddle (Top)
+            ctx.fillStyle = '#ff1744';
+            ctx.fillRect(oppPaddleX - 40, 15, 80, 15);
+        }
+    </script>
+</body>
+</html>
